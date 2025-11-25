@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ground Station Node Simulator</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .panel {
+            background: #2a2a2a;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        h1 { margin: 0 0 20px 0; }
+        h2 { 
+            margin: 0 0 15px 0; 
+            border-bottom: 2px solid #fff;
+            padding-bottom: 10px;
+        }
+        .connection-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        input, button, select {
+            padding: 10px;
+            font-size: 16px;
+            margin: 5px;
+            border-radius: 5px;
+            border: 1px solid #555;
+        }
+        input, select {
+            background: #3a3a3a;
+            color: #fff;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        button {
+            background: #555;
+            color: white;
+            border: none;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover { background: #666; }
+        button.stop {
+            background: #333;
+        }
+        button.stop:hover { background: #444; }
+        .status-box {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .connected { background: #333; }
+        .disconnected { background: #222; }
+        .node-config {
+            background: #3a3a3a;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .node-config h3 {
+            margin-top: 0;
+            color: #fff;
+        }
+        .config-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .telemetry-preview {
+            background: #000;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px;
+            color: #2196F3;
+        }
+        .log-entry.sent { color: #2196F3; }
+        .log-entry.error { color: #2196F3; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .stat-item {
+            background: #3a3a3a;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-top: 5px;
+        }
+        .preset-nodes {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .preset-btn {
+            background: #555;
+            font-size: 14px;
+            padding: 8px;
+        }
+        .preset-btn:hover {
+            background: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ground Station Node Simulator</h1>
+        
+        <div class="panel">
+            <h2>Connection Settings</h2>
+            <div class="connection-section">
+                <div>
+                    <label>Server IP:</label>
+                    <input type="text" id="serverIp" placeholder="EC2 IP" value="43.204.19.202">
+                </div>
+                <div>
+                    <label>Node ID:</label>
+                    <input type="text" id="nodeId" placeholder="e.g., node-test-001" value="node-test-001">
+                </div>
+            </div>
+            <div style="margin-top: 15px;">
+                <button onclick="connect()">Connect</button>
+                <button onclick="disconnect()" class="stop">Disconnect</button>
+            </div>
+            <div id="status" class="status-box disconnected">
+                Status: Disconnected
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Quick Node Presets</h2>
+            <p style="color: #aaa; margin-bottom: 15px;">Click to set node ID and connect multiple nodes in different tabs</p>
+            <div class="preset-nodes">
+                <button class="preset-btn" onclick="setNodeId('node-test-001')">GS Node 001</button>
+                <button class="preset-btn" onclick="setNodeId('node-test-002')">GS Node 002</button>
+                <button class="preset-btn" onclick="setNodeId('node-test-003')">GS Node 003</button>
+                <button class="preset-btn" onclick="setNodeId('node-test-004')">GS Node 004</button>
+                <button class="preset-btn" onclick="setNodeId('node-test-005')">GS Node 005</button>
+                <button class="preset-btn" onclick="setNodeId('node-test-006')">GS Node 006</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Telemetry Configuration</h2>
+            <div class="node-config">
+                <h3>Transmission Rate</h3>
+                <select id="telemetryRate">
+                    <option value="1000">1 Hz (1 second)</option>
+                    <option value="500" selected>2 Hz (0.5 seconds)</option>
+                    <option value="200">5 Hz (0.2 seconds)</option>
+                </select>
+            </div>
+            
+            <div class="node-config">
+                <h3>Telemetry Range Settings</h3>
+                <div class="config-row">
+                    <div>
+                        <label>Azimuth Range:</label>
+                        <input type="number" id="azimuthMin" value="0" placeholder="Min">
+                        <input type="number" id="azimuthMax" value="360" placeholder="Max">
+                    </div>
+                    <div>
+                        <label>Elevation Range:</label>
+                        <input type="number" id="elevationMin" value="0" placeholder="Min">
+                        <input type="number" id="elevationMax" value="90" placeholder="Max">
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div>
+                        <label>Signal Range (dBm):</label>
+                        <input type="number" id="signalMin" value="-100" placeholder="Min">
+                        <input type="number" id="signalMax" value="-70" placeholder="Max">
+                    </div>
+                    <div>
+                        <label>Temperature Range (°C):</label>
+                        <input type="number" id="tempMin" value="20" placeholder="Min">
+                        <input type="number" id="tempMax" value="40" placeholder="Max">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <button onclick="startTelemetry()">Start Sending Telemetry</button>
+                <button onclick="stopTelemetry()" class="stop">Stop Sending</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Statistics</h2>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value" id="totalSent">0</div>
+                    <div class="stat-label">Total Sent</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="rate">0</div>
+                    <div class="stat-label">Messages/sec</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="uptime">00:00</div>
+                    <div class="stat-label">Uptime</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="lastSent">--</div>
+                    <div class="stat-label">Last Sent</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Telemetry Preview & Log</h2>
+            <div class="telemetry-preview" id="telemetryLog">
+                <em>Connect and start telemetry to see data...</em>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let telemetryInterval = null;
+        let stats = {
+            totalSent: 0,
+            startTime: null,
+            lastSecondCount: 0,
+            currentSecond: Math.floor(Date.now() / 1000)
+        };
+        
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('telemetryLog');
+            if (logDiv.children.length === 1 && logDiv.children[0].tagName === 'EM') {
+                logDiv.innerHTML = '';
+            }
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            
+            // Keep only last 100 entries
+            while (logDiv.children.length > 100) {
+                logDiv.removeChild(logDiv.firstChild);
+            }
+        }
+        
+        function updateStatus(text, connected) {
+            const status = document.getElementById('status');
+            status.textContent = 'Status: ' + text;
+            status.className = 'status-box ' + (connected ? 'connected' : 'disconnected');
+        }
+        
+        function setNodeId(nodeId) {
+            document.getElementById('nodeId').value = nodeId;
+            log(`Node ID set to: ${nodeId}`);
+        }
+        
+        function connect() {
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            const ip = document.getElementById('serverIp').value;
+            const nodeId = document.getElementById('nodeId').value;
+            
+            if (!nodeId) {
+                alert('Please enter a Node ID');
+                return;
+            }
+            
+            const url = `http://${ip}:3001`;
+            log(`Connecting to ${url} as node: ${nodeId}...`);
+            
+            socket = io(url);
+            
+            socket.on('connect', () => {
+                log(` Connected! Socket ID: ${socket.id}`);
+                updateStatus('Connected', true);
+                socket.emit('identify', { type: 'node', nodeId: nodeId });
+            });
+            
+            socket.on('disconnect', () => {
+                log('Disconnected from server', 'error');
+                updateStatus('Disconnected', false);
+                stopTelemetry();
+            });
+            
+            socket.on('error', (error) => {
+                log(`Error: ${error}`, 'error');
+            });
+            
+            socket.on('command', (command) => {
+                log(`Received command: ${JSON.stringify(command)}`, 'info');
+            });
+        }
+        
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                updateStatus('Disconnected', false);
+                stopTelemetry();
+                log('Disconnected', 'error');
+            }
+        }
+        
+        function generateTelemetry() {
+            const nodeId = document.getElementById('nodeId').value;
+            const azimuthMin = parseFloat(document.getElementById('azimuthMin').value) || 0;
+            const azimuthMax = parseFloat(document.getElementById('azimuthMax').value) || 360;
+            const elevationMin = parseFloat(document.getElementById('elevationMin').value) || 0;
+            const elevationMax = parseFloat(document.getElementById('elevationMax').value) || 90;
+            const signalMin = parseFloat(document.getElementById('signalMin').value) || -100;
+            const signalMax = parseFloat(document.getElementById('signalMax').value) || -70;
+            const tempMin = parseFloat(document.getElementById('tempMin').value) || 20;
+            const tempMax = parseFloat(document.getElementById('tempMax').value) || 40;
+            
+            return {
+                nodeId: nodeId,
+                azimuth: azimuthMin + Math.random() * (azimuthMax - azimuthMin),
+                elevation: elevationMin + Math.random() * (elevationMax - elevationMin),
+                signalStrength: signalMin + Math.random() * (signalMax - signalMin),
+                temperature: tempMin + Math.random() * (tempMax - tempMin),
+                timestamp: new Date().toISOString()
+            };
+        }
+        
+        function startTelemetry() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first!');
+                return;
+            }
+            
+            const rate = parseInt(document.getElementById('telemetryRate').value);
+            const nodeId = document.getElementById('nodeId').value;
+            
+            if (telemetryInterval) {
+                clearInterval(telemetryInterval);
+            }
+            
+            stats.startTime = Date.now();
+            stats.totalSent = 0;
+            stats.lastSecondCount = 0;
+            stats.currentSecond = Math.floor(Date.now() / 1000);
+            
+            log(`Started sending telemetry every ${rate}ms (${1000/rate} Hz)`);
+            
+            telemetryInterval = setInterval(() => {
+                const telemetry = generateTelemetry();
+                
+                socket.emit('telemetry', telemetry);
+                
+                stats.totalSent++;
+                const currentSecond = Math.floor(Date.now() / 1000);
+                if (currentSecond !== stats.currentSecond) {
+                    stats.lastSecondCount = stats.totalSent - (stats.totalSent - stats.lastSecondCount);
+                    stats.currentSecond = currentSecond;
+                }
+                
+                updateStats();
+                
+                log(`Sent: Az=${telemetry.azimuth.toFixed(1)}° El=${telemetry.elevation.toFixed(1)}° Sig=${telemetry.signalStrength.toFixed(1)}dBm Temp=${telemetry.temperature.toFixed(1)}°C`, 'sent');
+            }, rate);
+        }
+        
+        function stopTelemetry() {
+            if (telemetryInterval) {
+                clearInterval(telemetryInterval);
+                telemetryInterval = null;
+                log('Stopped sending telemetry');
+            }
+        }
+        
+        function updateStats() {
+            document.getElementById('totalSent').textContent = stats.totalSent;
+            
+            const rate = parseInt(document.getElementById('telemetryRate').value);
+            const messagesPerSec = 1000 / rate;
+            document.getElementById('rate').textContent = messagesPerSec.toFixed(1);
+            
+            if (stats.startTime) {
+                const uptimeMs = Date.now() - stats.startTime;
+                const minutes = Math.floor(uptimeMs / 60000);
+                const seconds = Math.floor((uptimeMs % 60000) / 1000);
+                document.getElementById('uptime').textContent = 
+                    `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            }
+            
+            document.getElementById('lastSent').textContent = new Date().toLocaleTimeString();
+        }
+        
+        setInterval(updateStats, 1000);
+    </script>
+</body>
+</html>
