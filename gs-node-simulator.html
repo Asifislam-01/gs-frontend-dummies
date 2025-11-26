@@ -138,10 +138,9 @@
 </head>
 <body>
     <div class="container">
-        <h1>Ground Station Node Simulator</h1>
-        
+        <h1>Ground Station Node Simulator</h1>  
         <div class="panel">
-            <h2>Connection Settings</h2>
+            <h2>Connection config</h2>
             <div class="connection-section">
                 <div>
                     <label>Server IP:</label>
@@ -163,7 +162,6 @@
 
         <div class="panel">
             <h2>Node informations </h2>
-            <p style="color: #aaa; margin-bottom: 15px;">Click to set node ID and connect multiple nodes in different tabs</p>
             <div class="preset-nodes">
                 <button class="preset-btn" onclick="setNodeId('node-test-001')">GS Node 001</button>
                 <button class="preset-btn" onclick="setNodeId('node-test-002')">GS Node 002</button>
@@ -216,7 +214,7 @@
             <div style="margin-top: 15px;">
                 <button onclick="startTelemetry()">Start Sending Telemetry</button>
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #555;">
-                    <h3 style="color: #fff;">File Upload Simulation</h3>
+                    <h3 style="color: #fff;">File Upload testing</h3>
                     <div style="margin: 10px 0;">
                         <label>File Size (MB):</label>
                         <select id="fileSize">
@@ -235,7 +233,7 @@
         </div>
 
         <div class="panel">
-            <h2>Statistics</h2>
+            <h2>Stats</h2>
             <div class="stats">
                 <div class="stat-item">
                     <div class="stat-value" id="totalSent">0</div>
