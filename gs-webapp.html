@@ -169,6 +169,42 @@
             color: #aaa;
             margin-top: 5px;
         }
+        .files-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .file-card {
+            background: #3a3a3a;
+            border-radius: 8px;
+            padding: 15px;
+            border-left: 4px solid #2196F3;
+        }
+        .file-card h4 {
+            margin: 0 0 10px 0;
+            color: #fff;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .file-info {
+            font-size: 12px;
+            color: #aaa;
+            margin: 5px 0;
+        }
+        .file-download-btn {
+            margin-top: 10px;
+            padding: 8px 15px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .file-download-btn:hover {
+            background: #1976D2;
+        }
     </style>
 </head>
 <body>
@@ -211,6 +247,14 @@
         <div class="nodes-grid" id="nodesGrid">
             <div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 40px;">
                 No nodes connected. Connect to server and wait for nodes to send telemetry.
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <h2> Uploaded Files</h2>
+            <button onclick="fetchFiles()">Refresh Files</button>
+            <div id="filesGrid" style="margin-top: 20px;">
+                <em style="color: #888;">No files uploaded yet. Click "Refresh Files" to check.</em>
             </div>
         </div>
 
@@ -461,8 +505,85 @@
             });
             document.getElementById('totalNodes').textContent = activeCount;
         }
+        socket.on('new-file', (data) => {
+            log(` New file uploaded by ${data.nodeId}: ${data.filename} (${(data.fileSize / 1024 / 1024).toFixed(2)} MB)`, 'node-connect');
+            fetchFiles(); // Refresh file list
+        });
         
-        // Check for inactive nodes periodically
+        async function fetchFiles() {
+            const ip = document.getElementById('serverIp').value;
+            
+            try {
+                const response = await fetch(`http://${ip}:3000/api/files?limit=20`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayFiles(result.data);
+                    log(`Fetched ${result.data.length} files from database`, 'info');
+                }
+            } catch (error) {
+                log(`Error fetching files: ${error.message}`, 'info');
+            }
+        }
+        
+        function displayFiles(files) {
+            const filesGrid = document.getElementById('filesGrid');
+            
+            if (files.length === 0) {
+                filesGrid.innerHTML = '<em style="color: #888;">No files uploaded yet.</em>';
+                return;
+            }
+            
+            filesGrid.className = 'files-grid';
+            filesGrid.innerHTML = '';
+            
+            files.forEach(file => {
+                const card = document.createElement('div');
+                card.className = 'file-card';
+                
+                const uploadDate = new Date(file.upload_timestamp);
+                const fileSize = (file.file_size / 1024 / 1024).toFixed(2);
+                
+                card.innerHTML = `
+                    <h4> ${file.filename}</h4>
+                    <div class="file-info"><strong>Node:</strong> ${file.node_id}</div>
+                    <div class="file-info"><strong>Size:</strong> ${fileSize} MB</div>
+                    <div class="file-info"><strong>Type:</strong> ${file.file_type || 'Unknown'}</div>
+                    <div class="file-info"><strong>Uploaded:</strong> ${uploadDate.toLocaleString()}</div>
+                    <button class="file-download-btn" onclick="downloadFile('${file.node_id}', ${file.id})">
+                        Download File
+                    </button>
+                `;
+                
+                filesGrid.appendChild(card);
+            });
+        }
+        
+        async function downloadFile(nodeId, fileId) {
+            const ip = document.getElementById('serverIp').value;
+            
+            try {
+                log(`Requesting download URL for file ID: ${fileId}...`, 'info');
+                
+                const response = await fetch(`http://${ip}:3000/api/files/${nodeId}/${fileId}/download`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    log(`Download URL generated. Starting download...`, 'info');
+                    
+                    // Open download in new tab
+                    window.open(result.url, '_blank');
+                    
+                    log(`File: ${result.filename}`, 'info');
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                log(`Download error: ${error.message}`, 'info');
+                alert('Error generating download URL: ' + error.message);
+            }
+        }
+        
         setInterval(() => {
             const now = Date.now();
             nodes.forEach((nodeData, nodeId) => {

@@ -162,7 +162,7 @@
         </div>
 
         <div class="panel">
-            <h2>Quick Node Presets</h2>
+            <h2>Node informations </h2>
             <p style="color: #aaa; margin-bottom: 15px;">Click to set node ID and connect multiple nodes in different tabs</p>
             <div class="preset-nodes">
                 <button class="preset-btn" onclick="setNodeId('node-test-001')">GS Node 001</button>
@@ -215,6 +215,21 @@
             
             <div style="margin-top: 15px;">
                 <button onclick="startTelemetry()">Start Sending Telemetry</button>
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #555;">
+                    <h3 style="color: #fff;">File Upload Simulation</h3>
+                    <div style="margin: 10px 0;">
+                        <label>File Size (MB):</label>
+                        <select id="fileSize">
+                            <option value="1">1 MB</option>
+                            <option value="5" selected>5 MB</option>
+                            <option value="10">10 MB</option>
+                            <option value="50">50 MB</option>
+                            <option value="100">100 MB</option>
+                        </select>
+                    </div>
+                    <button onclick="uploadFile()">Upload File to S3</button>
+                    <div id="uploadProgress" style="margin-top: 10px; color: #2196F3;"></div>
+                </div>
                 <button onclick="stopTelemetry()" class="stop">Stop Sending</button>
             </div>
         </div>
@@ -422,6 +437,68 @@
         }
         
         setInterval(updateStats, 1000);
+
+        async function uploadFile() {
+    if (!socket || !socket.connected) {
+        alert('Please connect first!');
+        return;
+    }
+    
+    const nodeId = document.getElementById('nodeId').value;
+    const fileSizeMB = parseInt(document.getElementById('fileSize').value);
+    const fileSize = fileSizeMB * 1024 * 1024;
+    
+    const progressDiv = document.getElementById('uploadProgress');
+    progressDiv.textContent = `Generating ${fileSizeMB} MB test file...`;
+    log(`Generating ${fileSizeMB} MB test file...`);
+    
+    const testData = new Uint8Array(fileSize);
+    for (let i = 0; i < fileSize; i++) {
+        testData[i] = Math.floor(Math.random() * 256);
+    }
+    
+    const filename = `rf-capture-${Date.now()}.bin`;
+    const s3Key = `${nodeId}/${filename}`;
+    
+    progressDiv.textContent = `Uploading ${filename} to server...`;
+    log(`Uploading ${filename} (${fileSizeMB} MB)...`);
+    
+    try {
+        const serverIp = document.getElementById('serverIp').value;
+        
+        const formData = new FormData();
+        const blob = new Blob([testData], { type: 'application/octet-stream' });
+        
+        formData.append('file', blob, filename);
+        formData.append('nodeId', nodeId);
+        formData.append('s3Key', s3Key);
+        formData.append('fileType', 'rf-capture');
+        
+        // Upload with progress tracking
+        const response = await fetch(`http://${serverIp}:3000/api/upload-multipart`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            progressDiv.textContent = `Upload complete!`;
+            log(`File uploaded successfully: ${filename}`, 'sent');
+            log(` S3 Location: ${result.s3Location}`, 'sent');
+            
+            setTimeout(() => {
+                progressDiv.textContent = '';
+            }, 5000);
+        } else {
+            throw new Error(result.error || 'Upload failed');
+        }
+        
+    } catch (error) {
+        log(`Upload failed: ${error.message}`, 'error');
+        progressDiv.textContent = `Upload failed: ${error.message}`;
+    }
+}
     </script>
 </body>
 </html>
