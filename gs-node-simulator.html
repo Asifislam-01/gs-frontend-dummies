@@ -144,7 +144,7 @@
             <div class="connection-section">
                 <div>
                     <label>Server IP:</label>
-                    <input type="text" id="serverIp" placeholder="EC2 IP" value="13.203.130.124">
+                    <input type="text" id="serverIp" placeholder="EC2 IP" value="43.204.19.202">
                 </div>
                 <div>
                     <label>Node ID:</label>
@@ -255,6 +255,28 @@
         </div>
 
         <div class="panel">
+            <h2>Rotator/Antenna Control</h2>
+            <div id="rotatorPanel" style="margin-top: 15px;">
+                <div style="background: #3a3a3a; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                    <div style="color: #aaa; font-size: 12px; margin-bottom: 5px;">Received Command:</div>
+                    <div id="rotatorCommand" style="font-size: 16px; color: #fff;">--</div>
+                </div>
+                <div style="background: #3a3a3a; padding: 15px; border-radius: 5px;">
+                    <div style="display: flex; gap: 30px;">
+                        <div>
+                            <div style="color: #aaa; font-size: 12px; margin-bottom: 5px;">Current Azimuth:</div>
+                            <div id="currentAzimuth" style="font-size: 20px; font-weight: bold; color: #fff;">0.0°</div>
+                        </div>
+                        <div>
+                            <div style="color: #aaa; font-size: 12px; margin-bottom: 5px;">Current Elevation:</div>
+                            <div id="currentElevation" style="font-size: 20px; font-weight: bold; color: #fff;">0.0°</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
             <h2>Stats</h2>
             <div class="stats">
                 <div class="stat-item">
@@ -285,8 +307,100 @@
     </div>
 
     <script>
+        // Binary Protocol Encoder (matches backend protocol)
+        function uuidToBuffer(uuid) {
+            const hex = uuid.replace(/-/g, '');
+            const buffer = new ArrayBuffer(16);
+            const view = new Uint8Array(buffer);
+            for (let i = 0; i < 32; i += 2) {
+                view[i / 2] = parseInt(hex.substr(i, 2), 16);
+            }
+            return buffer;
+        }
+        
+        // This function is the standard modern way to convert a JavaScript String (which is stored in a format called UTF-16) into a Binary Buffer (specifically a Uint8Array in UTF-8 format).
+
+        function stringToBuffer(str) {
+            const encoder = new TextEncoder();
+            return encoder.encode(str);
+        }
+
+        function encodePacketHeader(fileId, nodeId, filename, fileSize, totalPackets, headerData) {
+            const fileIdBuffer = uuidToBuffer(fileId);
+            const nodeIdBuffer = stringToBuffer(nodeId);
+            const filenameBuffer = stringToBuffer(filename);
+            const headerDataBuffer = headerData ? new Uint8Array(headerData) : new Uint8Array(0);
+
+            const nodeIdLength = nodeIdBuffer.length;
+            const filenameLength = filenameBuffer.length;
+            const headerDataLength = headerDataBuffer.length;
+
+            const totalLength = 16 + 4 + nodeIdLength + 4 + filenameLength + 8 + 4 + headerDataLength;
+            const buffer = new ArrayBuffer(totalLength);
+            const view = new DataView(buffer);
+            const uint8View = new Uint8Array(buffer);
+
+            let offset = 0;
+
+            uint8View.set(new Uint8Array(fileIdBuffer), offset);
+            offset += 16;
+
+            view.setUint32(offset, nodeIdLength, false);
+            offset += 4;
+            uint8View.set(nodeIdBuffer, offset);
+            offset += nodeIdLength;
+
+            view.setUint32(offset, filenameLength, false);
+            offset += 4;
+            uint8View.set(filenameBuffer, offset);
+            offset += filenameLength;
+
+            view.setBigUint64(offset, BigInt(fileSize), false);
+            offset += 8;
+
+            view.setUint32(offset, totalPackets, false);
+            offset += 4;
+
+            if (headerDataLength > 0) {
+                uint8View.set(headerDataBuffer, offset);
+            }
+
+            return buffer;
+        }
+
+        function encodePacketData(fileId, packetNumber, data, isLastPacket) {
+            const fileIdBuffer = uuidToBuffer(fileId);
+            const dataBuffer = new Uint8Array(data);
+
+            const totalLength = 16 + 4 + 1 + dataBuffer.length;
+            const buffer = new ArrayBuffer(totalLength);
+            const view = new DataView(buffer);
+            const uint8View = new Uint8Array(buffer);
+
+            let offset = 0;
+
+            uint8View.set(new Uint8Array(fileIdBuffer), offset);
+            offset += 16;
+
+            view.setUint32(offset, packetNumber, false);
+            offset += 4;
+
+            view.setUint8(offset, isLastPacket ? 1 : 0);
+            offset += 1;
+
+            uint8View.set(dataBuffer, offset);
+
+            return buffer;
+        }
+
         let socket = null;
         let telemetryInterval = null;
+        let rotatorInterval = null;
+        let currentAzimuth = 0.0;
+        let currentElevation = 0.0;
+        let targetAzimuth = 0.0;
+        let targetElevation = 0.0;
+        let nodeId = '';
         let stats = {
             totalSent: 0,
             startTime: null,
@@ -328,12 +442,14 @@
             }
             
             const ip = document.getElementById('serverIp').value;
-            const nodeId = document.getElementById('nodeId').value;
+            const currentNodeId = document.getElementById('nodeId').value;
             
-            if (!nodeId) {
+            if (!currentNodeId) {
                 alert('Please enter a Node ID');
                 return;
             }
+            
+            nodeId = currentNodeId;
             
             const url = `http://${ip}:3001`;
             log(`Connecting to ${url} as node: ${nodeId}...`);
@@ -343,6 +459,7 @@
             socket.on('connect', () => {
                 log(` Connected! Socket ID: ${socket.id}`);
                 updateStatus('Connected', true);
+                // Use the nodeId from outer scope
                 socket.emit('identify', { type: 'node', nodeId: nodeId });
             });
             
@@ -350,6 +467,10 @@
                 log('Disconnected from server', 'error');
                 updateStatus('Disconnected', false);
                 stopTelemetry();
+                if (rotatorInterval) {
+                    clearInterval(rotatorInterval);
+                    rotatorInterval = null;
+                }
             });
             
             socket.on('error', (error) => {
@@ -358,6 +479,18 @@
             
             socket.on('command', (command) => {
                 log(`Received command: ${JSON.stringify(command)}`, 'info');
+            });
+            
+            socket.on('rotator-command', (data) => {
+                const { azimuth, elevation, rate } = data;
+                const movementRate = rate || 1.0;
+                log(`Rotator command received: Az=${azimuth}°, El=${elevation}°, Rate=${movementRate}°/sec`, 'info');
+                console.log('Rotator command received:', data);
+                
+                document.getElementById('rotatorCommand').textContent = `Azimuth: ${azimuth}°, Elevation: ${elevation}°, Rate: ${movementRate}°/sec`;
+                
+                // Start gradual movement with specified rate
+                startRotatorMovement(azimuth, elevation, movementRate);
             });
             
             // Handle retransmit command
@@ -370,7 +503,6 @@
                     log(`Error: File data not found for ${fileId}. Cannot retransmit.`, 'error');
                     return;
                 }
-                
                 
                 const { data: fileData, packetSize } = fileInfo;
                 
@@ -406,6 +538,10 @@
                 socket = null;
                 updateStatus('Disconnected', false);
                 stopTelemetry();
+                if (rotatorInterval) {
+                    clearInterval(rotatorInterval);
+                    rotatorInterval = null;
+                }
                 log('Disconnected', 'error');
             }
         }
@@ -584,26 +720,24 @@
                 }
             }
             
-            // Prepare header packet data (packet #0) - first chunk of file data (bytes 0-199)
             const headerChunkStart = 0;
             const headerChunkEnd = Math.min(packetSize, currentFileData.length);
             const headerChunk = currentFileData.slice(headerChunkStart, headerChunkEnd);
             
-            // Send header packet metadata WITH packet 0 data together
-            const headerMetadata = {
-                fileId: currentFileId,
-                nodeId: nodeId,
-                filename: `satellite-data-${Date.now()}.bin`,
-                fileSize: fileSize,
-                totalPackets: totalPackets
-            };
+            const filename = `satellite-data-${Date.now()}.bin`;
+            const binaryHeader = encodePacketHeader(
+                currentFileId,
+                nodeId,
+                filename,
+                fileSize,
+                totalPackets,
+                headerChunk.buffer
+            );
             
-            // Send header metadata and packet 0 data together in one event
-            socket.emit('packet-header', headerMetadata, headerChunk.buffer);
-            log(`Header metadata + packet 0 sent: ${headerMetadata.filename} (${totalPackets} packets, ${headerChunk.length} bytes)`);
+            socket.emit('packet-header', binaryHeader);
+            log(`Binary header sent: ${filename} (${totalPackets} packets, ${headerChunk.length} bytes payload)`);
             packetsSent++;
             
-            // Start sending data packets from packet #1 (remaining file data)
             currentPacketNumber = 1;
             
             log(`Starting packet transmission loop: ${totalPackets} total packets, will skip: ${packetsToSkipSet.size} packets`);
@@ -642,18 +776,18 @@
                 const end = Math.min(start + packetSize, currentFileData.length);
                 const chunk = currentFileData.slice(start, end);
                 
-                // Create metadata (server expects: fileId, packetNumber, isLastPacket)
                 const isLastPacket = (currentPacketNumber === totalPackets - 1);
-                const metadata = {
-                    fileId: currentFileId,
-                    packetNumber: currentPacketNumber,
-                    isLastPacket: isLastPacket
-                };
+                const binaryPacket = encodePacketData(
+                    currentFileId,
+                    currentPacketNumber,
+                    chunk.buffer,
+                    isLastPacket
+                );
                 
                     // Send packet
                     if (socket && socket.connected) {
                         console.log(`[DEBUG] Sending packet ${currentPacketNumber}, chunk size: ${chunk.length}`);
-                socket.emit('packet-data', metadata, chunk.buffer);
+                socket.emit('packet-data', binaryPacket);
                 packetsSent++;
                 
                         // Log every packet for first 5, then every 10
@@ -691,6 +825,98 @@
             }
         }
 
+        function startRotatorMovement(targetAz, targetEl, rate = 1.0) {
+            // Stop any existing movement
+            if (rotatorInterval) {
+                clearInterval(rotatorInterval);
+                rotatorInterval = null;
+            }
+            
+            targetAzimuth = parseFloat(targetAz);
+            targetElevation = parseFloat(targetEl);
+            const movementRate = parseFloat(rate) || 1.0;
+            
+            log(`Starting rotator movement: Current Az=${currentAzimuth}° El=${currentElevation}° -> Target Az=${targetAzimuth}° El=${targetElevation}° at ${movementRate}°/sec`, 'info');
+            
+            // Function to send position update
+            function sendPositionUpdate() {
+                // Update display
+                document.getElementById('currentAzimuth').textContent = currentAzimuth.toFixed(1) + '°';
+                document.getElementById('currentElevation').textContent = currentElevation.toFixed(1) + '°';
+                
+                // Send position update to backend
+                if (socket && socket.connected) {
+                    const currentNodeId = document.getElementById('nodeId').value;
+                    if (currentNodeId) {
+                        const positionData = {
+                            nodeId: currentNodeId,
+                            azimuth: currentAzimuth,
+                            elevation: currentElevation
+                        };
+                        socket.emit('rotator-position', positionData);
+                        console.log('Rotator position sent:', positionData);
+                    } else {
+                        console.log('No nodeId available for rotator position update');
+                    }
+                } else {
+                    console.log('Socket not connected, cannot send rotator position');
+                }
+            }
+            
+            // Function to update position
+            function updatePosition() {
+                let changed = false;
+                
+                // Move azimuth towards target by rate amount
+                const azDiff = Math.abs(currentAzimuth - targetAzimuth);
+                if (azDiff > 0.1) {
+                    if (currentAzimuth < targetAzimuth) {
+                        currentAzimuth = Math.min(currentAzimuth + movementRate, targetAzimuth);
+                    } else {
+                        currentAzimuth = Math.max(currentAzimuth - movementRate, targetAzimuth);
+                    }
+                    changed = true;
+                }
+                
+                // Move elevation towards target by rate amount
+                const elDiff = Math.abs(currentElevation - targetElevation);
+                if (elDiff > 0.1) {
+                    if (currentElevation < targetElevation) {
+                        currentElevation = Math.min(currentElevation + movementRate, targetElevation);
+                    } else {
+                        currentElevation = Math.max(currentElevation - movementRate, targetElevation);
+                    }
+                    changed = true;
+                }
+                
+                // Always send position update
+                sendPositionUpdate();
+                
+                // Stop if reached target
+                if (!changed) {
+                    if (rotatorInterval) {
+                        clearInterval(rotatorInterval);
+                        rotatorInterval = null;
+                    }
+                    log(`Rotator reached target: Az=${currentAzimuth.toFixed(1)}°, El=${currentElevation.toFixed(1)}°`, 'info');
+                }
+            }
+            
+            // Send initial position immediately
+            sendPositionUpdate();
+            
+            // Check if we need to move
+            const needsMovement = Math.abs(currentAzimuth - targetAzimuth) > 0.1 || 
+                                 Math.abs(currentElevation - targetElevation) > 0.1;
+            
+            if (needsMovement) {
+                // Update every second with the specified rate (degrees per second)
+                rotatorInterval = setInterval(updatePosition, 1000);
+            } else {
+                log(`Already at target position: Az=${currentAzimuth.toFixed(1)}°, El=${currentElevation.toFixed(1)}°`, 'info');
+            }
+        }
+        
         async function uploadFile() {
     if (!socket || !socket.connected) {
         alert('Please connect first!');

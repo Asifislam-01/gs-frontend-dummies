@@ -224,6 +224,37 @@
         </div>
 
         <div class="stats-panel">
+            <h2>Rotator/Antenna Control</h2>
+            <div style="margin-top: 15px;">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #aaa;">Node ID:</label>
+                    <input type="text" id="rotatorNodeId" placeholder="e.g., node-test-001" style="width: 200px;">
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #aaa;">Position (azimuth,elevation):</label>
+                    <input type="text" id="rotatorCommand" placeholder="e.g., 45,30" style="width: 200px;">
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #aaa;">Rate (degrees per second):</label>
+                    <input type="number" id="rotatorRate" placeholder="e.g., 1" value="1" min="0.1" max="10" step="0.1" style="width: 200px;">
+                    <button onclick="sendRotatorCommand()">Set Position</button>
+                </div>
+                <div style="margin-top: 15px; padding: 15px; background: #3a3a3a; border-radius: 5px;">
+                    <div style="display: flex; gap: 30px;">
+                        <div>
+                            <div style="color: #aaa; font-size: 12px; margin-bottom: 5px;">Current Azimuth:</div>
+                            <div id="currentAzimuth" style="font-size: 24px; font-weight: bold; color: #fff;">--</div>
+                        </div>
+                        <div>
+                            <div style="color: #aaa; font-size: 12px; margin-bottom: 5px;">Current Elevation:</div>
+                            <div id="currentElevation" style="font-size: 24px; font-weight: bold; color: #fff;">--</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-panel">
             <h2>System Statistics</h2>
             <button onclick="fetchNodes()">Fetch Nodes</button>
             <button onclick="fetchStats()">Refresh Stats</button>
@@ -468,6 +499,24 @@
             socket.on('new-file', (data) => {
                 log(`New file uploaded by ${data.nodeId}: ${data.filename} (${(data.fileSize / 1024 / 1024).toFixed(2)} MB)`, 'node-connect');
                 fetchFiles(); // Refresh file list
+            });
+            
+            // Rotator position updates
+            socket.on('rotator-position', (data) => {
+                console.log('Rotator position received in web app:', data);
+                if (data.azimuth !== undefined && data.elevation !== undefined) {
+                    document.getElementById('currentAzimuth').textContent = data.azimuth.toFixed(1) + '°';
+                    document.getElementById('currentElevation').textContent = data.elevation.toFixed(1) + '°';
+                    log(`Rotator position: Az=${data.azimuth.toFixed(1)}° El=${data.elevation.toFixed(1)}° (Node: ${data.nodeId})`, 'info');
+                } else {
+                    console.error('Invalid rotator position data:', data);
+                }
+            });
+            
+            // Rotator error handling
+            socket.on('rotator-error', (data) => {
+                log(`Rotator error: ${data.error}`, 'info');
+                alert('Rotator Error: ' + data.error);
             });
         }
         
@@ -826,6 +875,41 @@
         
         function hideSessions() {
             document.getElementById('sessionsPanel').style.display = 'none';
+        }
+        
+        function sendRotatorCommand() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first!');
+                return;
+            }
+            
+            const nodeId = document.getElementById('rotatorNodeId').value.trim();
+            const command = document.getElementById('rotatorCommand').value.trim();
+            const rate = parseFloat(document.getElementById('rotatorRate').value) || 1.0;
+            
+            if (!nodeId) {
+                alert('Please enter a Node ID');
+                return;
+            }
+            
+            if (!command) {
+                alert('Please enter position (azimuth,elevation)');
+                return;
+            }
+            
+            if (isNaN(rate) || rate <= 0) {
+                alert('Please enter a valid rate (degrees per second, must be > 0)');
+                return;
+            }
+            
+            // Send raw command to backend for processing
+            socket.emit('rotator-command', {
+                nodeId: nodeId,
+                command: command,
+                rate: rate
+            });
+            
+            log(`Rotator command sent: Node=${nodeId}, Command=${command}, Rate=${rate}°/sec`, 'info');
         }
         
         // Request retransmission of missing packets
