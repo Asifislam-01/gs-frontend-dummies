@@ -205,6 +205,51 @@
         .file-download-btn:hover {
             background: #a8bcd0;
         }
+        /* Camera streaming styles */
+        .camera-panel {
+            background: #2a2a2a;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        #cameraStatus {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 15px 30px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-weight: bold;
+            display: inline-block;
+        }
+        .camera-status-disconnected { color: #f44336; }
+        .camera-status-connecting { color: #ff9800; }
+        .camera-status-streaming { color: #4caf50; }
+        #remoteVideo {
+            width: 100%;
+            max-width: 960px;
+            background: #000;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            border: 3px solid #333;
+            display: block;
+            margin: 0 auto;
+        }
+        .camera-controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+        .camera-controls button {
+            padding: 14px 32px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
     </style>
 </head>
 <body>
@@ -251,6 +296,16 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="camera-panel">
+            <h2>Satellite Camera Stream</h2>
+            <div id="cameraStatus" class="camera-status-disconnected">Status: Disconnected</div>
+            <video id="remoteVideo" autoplay playsinline controls></video>
+            <div class="camera-controls">
+                <button id="cameraConnectBtn">▶Connect Camera</button>
+                <button id="cameraDisconnectBtn" disabled>Disconnect Camera</button>
             </div>
         </div>
 
@@ -973,6 +1028,166 @@
                 }
             });
         }, 5000);
+
+        // ========== Camera Streaming Functionality ==========
+        let cameraSocket = null;
+        let cameraPc = null;
+        
+        const videoEl = document.getElementById('remoteVideo');
+        const cameraStatusEl = document.getElementById('cameraStatus');
+        const cameraConnectBtn = document.getElementById('cameraConnectBtn');
+        const cameraDisconnectBtn = document.getElementById('cameraDisconnectBtn');
+        
+        function setCameraStatus(message, className) {
+            cameraStatusEl.textContent = `Status: ${message}`;
+            cameraStatusEl.className = `camera-status-${className}`;
+        }
+        
+        function cameraLog(message) {
+            console.log(`[Camera ${new Date().toLocaleTimeString()}] ${message}`);
+            log(`[Camera] ${message}`, 'info');
+        }
+        
+        async function connectCamera() {
+            try {
+                setCameraStatus('Connecting...', 'connecting');
+                cameraConnectBtn.disabled = true;
+                
+                const ip = document.getElementById('serverIp').value;
+                const url = `http://${ip}:3001`;
+                
+                cameraSocket = io(url, {
+                    reconnection: true,
+                    reconnectionDelay: 3000
+                });
+                
+                cameraSocket.on('connect', async () => {
+                    cameraLog('Socket.IO connected for camera');
+                    setCameraStatus('Connected - Requesting stream...', 'connecting');
+                    await setupCameraWebRTC();
+                });
+                
+                cameraSocket.on('disconnect', () => {
+                    cameraLog('Socket.IO disconnected for camera');
+                    setCameraStatus('Disconnected', 'disconnected');
+                    cleanupCamera();
+                });
+                
+                cameraSocket.on('camera:stream-available', () => {
+                    cameraLog('Camera stream is now available');
+                });
+                
+                cameraSocket.on('camera:stream-ended', (data) => {
+                    cameraLog(`Stream ended: ${data.reason}`);
+                    setCameraStatus(`Stream ended: ${data.reason}`, 'disconnected');
+                    videoEl.srcObject = null;
+                });
+                
+                cameraSocket.on('viewer:ice-candidate', async (candidate) => {
+                    if (cameraPc && candidate) {
+                        try {
+                            await cameraPc.addIceCandidate(new RTCIceCandidate(candidate));
+                            cameraLog('Added ICE candidate');
+                        } catch (e) {
+                            cameraLog(`ICE error: ${e.message}`);
+                        }
+                    }
+                });
+                
+            } catch (error) {
+                cameraLog(`Connection error: ${error.message}`);
+                setCameraStatus('Connection failed', 'disconnected');
+                cleanupCamera();
+            }
+        }
+        
+        async function setupCameraWebRTC() {
+            try {
+                cameraPc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+                
+                cameraPc.ontrack = (event) => {
+                    cameraLog('Video track received!');
+                    videoEl.srcObject = event.streams[0];
+                    
+                    videoEl.onloadedmetadata = () => {
+                        videoEl.play().then(() => {
+                            cameraLog('Playback started');
+                            setCameraStatus('Streaming Live', 'streaming');
+                            cameraDisconnectBtn.disabled = false;
+                        });
+                    };
+                };
+                
+                cameraPc.onicecandidate = (event) => {
+                    if (event.candidate && cameraSocket) {
+                        cameraSocket.emit('viewer:ice-candidate', event.candidate);
+                    }
+                };
+                
+                cameraPc.onconnectionstatechange = () => {
+                    cameraLog(`WebRTC state: ${cameraPc.connectionState}`);
+                    
+                    if (cameraPc.connectionState === 'failed') {
+                        cameraLog('WebRTC connection failed');
+                        setCameraStatus('Connection failed', 'disconnected');
+                    }
+                };
+                
+                const response = await new Promise((resolve) => {
+                    cameraSocket.emit('viewer:request-stream', {}, resolve);
+                });
+                
+                if (response.error) {
+                    throw new Error(response.error);
+                }
+                
+                cameraLog('Received offer from server');
+                
+                await cameraPc.setRemoteDescription(new RTCSessionDescription(response));
+                
+                const answer = await cameraPc.createAnswer();
+                await cameraPc.setLocalDescription(answer);
+                
+                cameraSocket.emit('viewer:answer', {
+                    type: 'answer',
+                    sdp: cameraPc.localDescription.sdp
+                });
+                
+                cameraLog('Sent answer to server');
+                
+            } catch (error) {
+                cameraLog(`WebRTC error: ${error.message}`);
+                setCameraStatus(error.message, 'disconnected');
+                cleanupCamera();
+            }
+        }
+        
+        function disconnectCamera() {
+            cameraLog('Disconnecting camera...');
+            cleanupCamera();
+            setCameraStatus('Disconnected', 'disconnected');
+        }
+        
+        function cleanupCamera() {
+            if (cameraPc) {
+                cameraPc.close();
+                cameraPc = null;
+            }
+            
+            if (cameraSocket) {
+                cameraSocket.close();
+                cameraSocket = null;
+            }
+            
+            videoEl.srcObject = null;
+            cameraConnectBtn.disabled = false;
+            cameraDisconnectBtn.disabled = true;
+        }
+
+        cameraConnectBtn.onclick = connectCamera;
+        cameraDisconnectBtn.onclick = disconnectCamera;
     </script>
 </body>
 </html>
