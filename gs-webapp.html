@@ -359,6 +359,22 @@
             </div>
         </div>
 
+        <div class="stats-panel">
+            <h2>System Diagnostics</h2>
+            <div style="margin-top: 15px;">
+                <div style="margin-bottom: 15px; color: #aaa; font-size: 14px;">
+                    Click on a subsystem to run diagnostic check:
+                </div>
+                <div id="diagnosticSubsystems" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                    <button onclick="runManualDiagnostic('camera')" style="padding: 12px 24px; font-size: 14px;">
+                         Camera
+                    </button>
+                    <button onclick="runManualDiagnostic('all')" style="padding: 12px 24px; font-size: 14px;">
+                         All Systems
+                    </button>
+            </div>
+        </div>
+
         <div class="telemetry-log">
             <h2>Telemetry Log</h2>
             <div id="telemetryLog"></div>
@@ -572,6 +588,17 @@
             socket.on('rotator-error', (data) => {
                 log(`Rotator error: ${data.error}`, 'info');
                 alert('Rotator Error: ' + data.error);
+            });
+            
+         
+            socket.on('diagnostic:full-update', (data) => {
+                console.log('Health update received:', data);
+                logDiagnosticData(data.systems, true);
+            });
+        
+            socket.on('diagnostic:update', (data) => {
+                console.log('Manual diagnostic update:', data);
+                logDiagnosticData(data.result || data, false);
             });
         }
         
@@ -1029,7 +1056,6 @@
             });
         }, 5000);
 
-        // ========== Camera Streaming Functionality ==========
         let cameraSocket = null;
         let cameraPc = null;
         
@@ -1188,6 +1214,98 @@
 
         cameraConnectBtn.onclick = connectCamera;
         cameraDisconnectBtn.onclick = disconnectCamera;
+
+        function logDiagnosticData(data, isAutoUpdate) {
+            if (!data) {
+                log('Diagnostic: No data available', 'info');
+                return;
+            }
+            
+            const prefix = isAutoUpdate ? '[Auto-Update]' : '[Manual Diagnostic]';
+            
+            if (typeof data === 'object' && !data.system_name && !data.status) {
+                updateSubsystemButtons(Object.keys(data));
+                Object.entries(data).forEach(([systemName, systemData]) => {
+                    logSingleDiagnostic(systemData, prefix);
+                });
+            } else {
+                logSingleDiagnostic(data, prefix);
+            }
+        }
+        
+        function updateSubsystemButtons(systems) {
+            const container = document.getElementById('diagnosticSubsystems');
+            if (!container) return;
+            
+            let html = '';
+            
+            systems.forEach(systemName => {
+                const displayName = systemName.charAt(0).toUpperCase() + systemName.slice(1);
+                html += `<button onclick="runManualDiagnostic('${systemName}')" style="padding: 12px 24px; font-size: 14px;">${displayName}</button>`;
+            });
+            
+            html += `<button onclick="runManualDiagnostic('all')" style="padding: 12px 24px; font-size: 14px;">All Systems</button>`;
+            
+            container.innerHTML = html;
+        }
+        
+        function logSingleDiagnostic(data, prefix) {
+            const systemName = data.system_name || 'System';
+            const status = data.status || 'unknown';
+            const statusIcon = status === 'healthy' || status === 'ok' ? '[OK]' : status === 'error' ? '[ERROR]' : '[WARN]';
+            
+            log(`${prefix} ${statusIcon} ${systemName}: ${status.toUpperCase()}`, 'info');
+            
+            if (data.message) {
+                log(`  ${systemName}: ${data.message}`, 'info');
+            }
+            
+            if (data.subsystems) {
+                data.subsystems.forEach(sub => {
+                    const subStatus = sub.status || 'unknown';
+                    log(`  Subsystem: ${sub.name} - ${sub.message || subStatus}`, 'info');
+                    
+                    if (sub.checks) {
+                        sub.checks.forEach(check => {
+                            const checkStatus = check.status ? 'PASS' : 'FAIL';
+                            const checkMsg = check.message || 'N/A';
+                            const checkValue = check.value && check.value !== check.message ? ` (${check.value})` : '';
+                            log(`    [${checkStatus}] ${check.name}: ${checkMsg}${checkValue}`, 'info');
+                        });
+                    }
+                    
+                    if (sub.pass_rate !== undefined) {
+                        log(`    Pass rate: ${sub.pass_rate}%`, 'info');
+                    }
+                });
+            }
+            
+            if (data.summary) {
+                const passed = data.summary.passed_checks || 0;
+                const total = data.summary.total_checks || 0;
+                const rate = data.summary.pass_rate !== undefined ? ` (${data.summary.pass_rate}%)` : '';
+                log(`  Summary: ${passed}/${total} checks passed${rate}`, 'info');
+            }
+            
+            if (data.timestamp) {
+                log(`  Last updated: ${new Date(data.timestamp).toLocaleString()}`, 'info');
+            }
+        }
+        
+        function runManualDiagnostic(system) {
+            if (!socket || !socket.connected) {
+                alert('Please connect first!');
+                return;
+            }
+            
+            console.log('Manual diagnostic request:', system);
+            log(`Requesting diagnostic for: ${system}`, 'info');
+            
+            socket.emit('diag:request', {
+                deviceId: 'satellite-pi-001',
+                system: system
+            });
+        }
     </script>
 </body>
 </html>
